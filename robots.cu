@@ -8,7 +8,6 @@ An implementation of the simulator described in this paper:
 http://stephane.magnenat.net/data/Evolutionary%20Conditions%20for%20the%20Emergence%20of%20Communication%20in%20Robots%20-%20Dario%20Floreano,%20Sara%20Mitri,%20St%C3%A9phane%20Magnenat,%20Laurent%20Keller%20-%20Current%20Biology%20-%202007.pdf
 
 */
-
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
@@ -42,16 +41,6 @@ typedef struct anotherLinkedListNode
 } scoreListNode;
 
 int main(){
-	runSimulation();
-	return 0;
-}
-
-/* ================================== */
-/* == THE CYCLES OF THE SIMULATION == */
-/* ================================== */
-
-/* runs the entire simulation from start to finish */
-void runSimulation(){
 	int numRobots = NUMCLANS * ROBOTSPERCLAN;
 	int statesLength = numRobots * 5;
 	int phenotypesLength = numRobots * 240;
@@ -68,7 +57,6 @@ void runSimulation(){
 	cudaMalloc((void**)deviceFinalScores, (numRobots * sizeof(int)));
 
 	randomPhenotypes(prevPhenotypes);
-
 	int i;
 	for(i=0; i<NUMGENERATIONS; i++){
 		randomStates(prevStates);
@@ -83,6 +71,123 @@ void runSimulation(){
 	free(prevStates);
 	cudaFree(devicePrevPhen);
 	cudaFree(devicePrevStat);
+}
+
+/* finds top 20% scorers, mates them, and produces a new generation of phenotypes. Also prints to log. */
+void produceNewGeneration(int* oldPhenotypes, int* finalScores, int numRobots, int* states, int generationNumber){
+	int numMedalists = floor(numRobots/5);
+
+	/* rank scores */
+	scoreListNode* scoreList = (scoreListNode *) malloc(sizeof(scoreListNode));
+	scoreList->next = NULL;
+	scoreList->correspondingRobot = 0;
+	scoreList->score = finalScores[0];
+	scoreListNode* iterScoreList;
+	/* For each score, traverse list from top until lower score found */
+	int i, j;
+	for(i=1; i<numRobots; i++){
+		scoreListNode* newNode = (scoreListNode *) malloc(sizeof(scoreListNode));
+		newNode->correspondingRobot = i;
+		newNode->score = finalScores[i];
+		iterScoreList = scoreList;
+		j=0
+		while((j<i) && (finalScores[i] < iterScoreList->score)){
+			iterScoreList = iterScoreList->next;
+		}
+		newNode->next = iterScoreList->next;
+		iterScoreList->next = newNode;
+	}
+
+	/*  Output data */
+	printScoreList(scoreList, numRobots, oldPhenotypes, states, generationNumber);
+
+	/* find top scorers ("medalists") */
+	int medalists[numMedalists];
+	iterScoreList = scoreList;
+	for(i=0; i<numMedalists; i++){
+		medalist[i] = iterScoreList->correspondingRobot;
+		iterScoreList = iterScoreList->next;
+	}
+
+	/* mate top scorers */
+	int* deviceOldPhen;
+	int* deviceNewPhen;
+	int* deviceMedalists;
+	cudaMalloc((void**)deviceOldPhen, (numRobots * 240 * sizeof(int)));
+	cudaMalloc((void**)deviceNewPhen, (numRobots * 240 * sizeof(int)));
+	cudaMalloc((void**)deviceMedalists, (numRobots * sizeof(int)));
+	cudaMemcpy(deviceOldPhen, oldPhenotypes, (240*numRobots), cudaMemcpyHostToDevice);
+	cudaMemcpy(deviceMedalists, medalists, numMedalists, cudaMemcpyHostToDevice);
+	mateRobotsRandomly<<1,numRobots>>(deviceOldPhen, deviceNewPhen, medalists, numMedalists);
+	cudaMemcpy(oldPhenotypes, deviceNewPhen, (240*numRobots), cudaMemcpyDeviceToHost);
+}
+
+/*  Outputs data about the current generation */
+void printScoreList(scoreListNode* scoreList, int numRobots, int* phenotypes, int* states, int generationNumber){
+
+	FILE *fp;
+	fp=fopen(DATALOGFILENAME, "a");
+
+	int translatedPhen[30];
+	int currentRobot;
+	int* iterPhen;
+	int* iterStates;
+	int i,j,k;
+	fprintf(fp, "generation %d\n\nDNA\nx-coordinate y-coordinate orientation brightness final-score\n\n", generationNumber);
+	for(i=0; i<numRobots; i++){
+		currentRobot = scoreList->correspondingRobot;
+		iterPhen = phenotypes + (240*currentRobot);
+		iterStates = states + (5*currentRobot);
+		for(j=0; j<30; j++){
+			for(k=0; k<8; k++){
+				fprintf(fp,"%d", &iterPhen);
+				iterPhen++
+			}
+			fprintf(fp, " ");
+		}
+		printf("\n");
+		for(j=0; j<4; j++){
+			fprintf(fp,"%d   ", &(iterStates++));
+		}
+		pfrintf(fp,"%d\n", (scoreList->score);
+		scoreList = scoreList->next;
+	}
+
+	fclose(fp);
+}
+
+/* randomly mates specified robots */
+__global__ void mateRobotsRandomly(int* oldPhen, int* newPhen, int* medalists, int numMedalists){
+
+	/* Get information about parents */
+	int tid = threadIdx.x;
+	int* child = malloc(240*sizeof(int));
+	int parenta = 0;
+	int parentb = 0;
+	while(parenta==parentb){
+		parenta = medalist + (random(numMedalists));
+		parentb = medalist + (random(numMedalists));
+	}
+	int* iterA = (oldPhen + 240*parenta);
+	int* iterB = (oldPhen + 240*parentb);
+	int* iterChild = child;
+	cudaMalloc((void**)iterA, (numRobots * 240 * sizeof(int)));
+	cudaMalloc((void**)iterB, (numRobots * 240 * sizeof(int)));
+	cudaMemcpy(iterA, (oldPhen + (240*parenta)), 240, cudaMemcpyDeviceToDevice);
+	cudaMemcpy(iterB, (oldPhen + (240*parentb)), 240, cudaMemcpyDeviceToDevice);
+
+	/* Populate child */
+	int i, currentA;
+	for(i=0; i<240; i++){
+		currentA = &iterA;
+		if((&(iterA++)==(&(iterB++))) || (tid%2 == 0))
+			&(child++) = currentA;
+		else
+			&(child++) = 1 - currentA;
+	}
+
+	/* Send child to global */
+	cudaMemcpy((newPhen+(240*tid)), child, 240, cudaMemcpyDeviceToDevice);
 }
 
 /* executes one generarion */
@@ -143,156 +248,6 @@ __device__ void ioCycle(int tid, int states[5], int* sharedPrevStates, int input
 	}
 	__syncthreads();
 }
-
-/* ========================================== */
-/* == PRE-GENERATION RANDOM INITIAL VALUES == */
-/* ========================================== */
-
-/* produces a list of random initial states */
-void randomStates(int* initialStates){
-	int numRobots = NUMCLANS * ROBOTSPERCLAN;
-	int i;
-	for(i=0; i<numRobots; i++){
-		&(initialStates++) = random(ARENASIDELENGTH);
-		&(initialStates++) = random(ARENASIDELENGTH);
-		&(initialStates++) = random(8) * pi / 4;
-		&(initialStates++) = random(11) / 10;
-		&(initialStates++) = 0;
-	}
-}
-
-/* produces a list of random binart phenotypes */
-void randomPhenotypes(int* initialPhenotypes){
-	int numPhenotypeBits = NUMCLANS * ROBOTSPERCLAN * 480;
-	int i;
-	for(i=0; i<totalPhenotypeBits; i++)
-		&(initialPhenotypes++) = random(2);
-}
-
-/* ======================================== */
-/* == POST-GENERATION MATING AND LOGGING == */
-/* ======================================== */
-
-/* finds top 20% scorers, mates them, and produces a new generation of phenotypes. Also prints to log. */
-void produceNewGeneration(int* oldPhenotypes, int* finalScores, int numRobots, int* states, int generationNumber){
-	int numMedalists = floor(numRobots/5);
-
-	/* rank scores */
-	scoreListNode* scoreList = (scoreListNode *) malloc(sizeof(scoreListNode));
-	scoreList->next = NULL;
-	scoreList->correspondingRobot = 0;
-	scoreList->score = finalScores[0];
-	scoreListNode* iterScoreList;
-	/* For each score, traverse list from top until lower score found */
-	int i, j;
-	for(i=1; i<numRobots; i++){
-		scoreListNode* newNode = (scoreListNode *) malloc(sizeof(scoreListNode));
-		newNode->correspondingRobot = i;
-		newNode->score = finalScores[i];
-		iterScoreList = scoreList;
-		j=0
-		while((j<i) && (finalScores[i] < iterScoreList->score)){
-			iterScoreList = iterScoreList->next;
-		}
-		newNode->next = iterScoreList->next;
-		iterScoreList->next = newNode;
-	}
-
-	/*  Output data */
-	printScoreList(scoreList, numRobots, oldPhenotypes, states, generationNumber);
-
-	/* find top scorers ("medalists") */
-	int medalists[numMedalists];
-	iterScoreList = scoreList;
-	for(i=0; i<numMedalists; i++){
-		medalist[i] = iterScoreList->correspondingRobot;
-		iterScoreList = iterScoreList->next;
-	}
-
-	/* mate top scorers */
-	int* deviceOldPhen;
-	int* deviceNewPhen;
-	int* deviceMedalists;
-	cudaMalloc((void**)deviceOldPhen, (numRobots * 240 * sizeof(int)));
-	cudaMalloc((void**)deviceNewPhen, (numRobots * 240 * sizeof(int)));
-	cudaMalloc((void**)deviceMedalists, (numRobots * sizeof(int)));
-	cudaMemcpy(deviceOldPhen, oldPhenotypes, (240*numRobots), cudaMemcpyHostToDevice);
-	cudaMemcpy(deviceMedalists, medalists, numMedalists, cudaMemcpyHostToDevice);
-	mateRobotsRandomly<<1,numRobots>>(deviceOldPhen, deviceNewPhen, medalists, numMedalists);
-	cudaMemcpy(oldPhenotypes, deviceNewPhen, (240*numRobots), cudaMemcpyDeviceToHost);
-}
-
-/* randomly mates specified robots */
-__global__ void mateRobotsRandomly(int* oldPhen, int* newPhen, int* medalists, int numMedalists){
-
-	/* Get information about parents */
-	int tid = threadIdx.x;
-	int* child = malloc(240*sizeof(int));
-	int parenta = 0;
-	int parentb = 0;
-	while(parenta==parentb){
-		parenta = medalist + (random(numMedalists));
-		parentb = medalist + (random(numMedalists));
-	}
-	int* iterA = (oldPhen + 240*parenta);
-	int* iterB = (oldPhen + 240*parentb);
-	int* iterChild = child;
-	cudaMalloc((void**)iterA, (numRobots * 240 * sizeof(int)));
-	cudaMalloc((void**)iterB, (numRobots * 240 * sizeof(int)));
-	cudaMemcpy(iterA, (oldPhen + (240*parenta)), 240, cudaMemcpyDeviceToDevice);
-	cudaMemcpy(iterB, (oldPhen + (240*parentb)), 240, cudaMemcpyDeviceToDevice);
-
-	/* Populate child */
-	int i, currentA;
-	for(i=0; i<240; i++){
-		currentA = &iterA;
-		if((&(iterA++)==(&(iterB++))) || (tid%2 == 0))
-			&(child++) = currentA;
-		else
-			&(child++) = 1 - currentA;
-	}
-
-	/* Send child to global */
-	cudaMemcpy((newPhen+(240*tid)), child, 240, cudaMemcpyDeviceToDevice);
-}
-
-/*  Outputs data about the current generation */
-void printScoreList(scoreListNode* scoreList, int numRobots, int* phenotypes, int* states, int generationNumber){
-
-	FILE *fp;
-	fp=fopen(DATALOGFILENAME, "a");
-
-	int translatedPhen[30];
-	int currentRobot;
-	int* iterPhen;
-	int* iterStates;
-	int i,j,k;
-	fprintf(fp, "generation %d\n\nDNA\nx-coordinate y-coordinate orientation brightness final-score\n\n", generationNumber);
-	for(i=0; i<numRobots; i++){
-		currentRobot = scoreList->correspondingRobot;
-		iterPhen = phenotypes + (240*currentRobot);
-		iterStates = states + (5*currentRobot);
-		for(j=0; j<30; j++){
-			for(k=0; k<8; k++){
-				fprintf(fp,"%d", &iterPhen);
-				iterPhen++
-			}
-			fprintf(fp, " ");
-		}
-		printf("\n");
-		for(j=0; j<4; j++){
-			fprintf(fp,"%d   ", &(iterStates++));
-		}
-		pfrintf(fp,"%d\n", (scoreList->score);
-		scoreList = scoreList->next;
-	}
-
-	fclose(fp);
-}
-
-/* ================================= */
-/* == END-OF-CYCLE POINT COUNTING == */
-/* ================================= */
 
 /* adds or removes a robot from an edible-queue */
 __device__ void queueChanging(int task, int robotInQuestion, edibleQueueNode* edibleQueues){
@@ -371,10 +326,6 @@ __device__ void tallyPoints(int* states, edibleQueueNode* edibleQueues){
 			break;
 	}
 }
-
-/* ========================== */
-/* == IOCYCLE CALCULATIONS == */
-/* ========================== */
 
 /* updates outputs for one robot, based upon inputs and phenotype */
 __device__ void updateOutputs(int outputs[3], int inputs[10], int phenotype[30], int states[5]){
@@ -456,6 +407,7 @@ __device__ void updateInputsEdibles(int states[5], int inputs[10], edibleQueueNo
 
 	/* Subtract input value from appropriate light bucket */
 	inputs[bucket] -= inputBrightness;
+
 
 	/* CALCULATE INPUTS FROM POISIN */
 
@@ -568,4 +520,25 @@ __device__ void updateStatesXYOB(int states[5], int outputs[3]){
 	states[1] = newy;
 	states[2] = newo;
 	states[3] = outputs[2]; /* The brightness can directly transfer */
+}
+
+/* produces a list of random initial states */
+void randomStates(int* initialStates){
+	int numRobots = NUMCLANS * ROBOTSPERCLAN;
+	int i;
+	for(i=0; i<numRobots; i++){
+		&(initialStates++) = random(ARENASIDELENGTH);
+		&(initialStates++) = random(ARENASIDELENGTH);
+		&(initialStates++) = random(8) * pi / 4;
+		&(initialStates++) = random(11) / 10;
+		&(initialStates++) = 0;
+	}
+}
+
+/* produces a list of random binart phenotypes */
+void randomPhenotypes(int* initialPhenotypes){
+	int numPhenotypeBits = NUMCLANS * ROBOTSPERCLAN * 480;
+	int i;
+	for(i=0; i<totalPhenotypeBits; i++)
+		&(initialPhenotypes++) = random(2);
 }
