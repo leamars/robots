@@ -559,9 +559,12 @@ __device__ void updateStatesXYOB(int states[5], int outputs[3]){
 
 	/* Calculate new orientation */
 	if (dir)
-		newo = (absoluteAngle - (pi/2)) % (pi*2);
+
+		calc = (pi*2);
+
+		newo = (absoluteAngle - (pi/2)) % calc;
 	else
-		newo = (absoluteAngle + (pi/2)) % (pi*2);
+		newo = (absoluteAngle + (pi/2)) % calc;
 
 	/* Assign new values */
 	states[0] = newx;
